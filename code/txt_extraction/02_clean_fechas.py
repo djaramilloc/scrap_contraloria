@@ -9,10 +9,19 @@ from pyprojroot import here
 # Clasificacion de jueces o fiscales
 registros = pd.read_parquet(here()/"data/wscrap/registros_juez_fiscal.parquet")
 
+# Remove observciones sin cargo
+registros = registros.loc[~registros['cargo'].isna()]
+
 # Minimo anio de cada uno
 registros.loc[registros['year'] == '', 'year'] = np.nan
 registros['year'] = registros['year'].astype(float)
 registros['min_year'] = registros.groupby(['cedula', 'cargo'])['year'].transform('min')
+
+# Find all zeros
+registros['zero'] = 1*(registros['iddoc'] == '0')
+registros['zero'] = registros.groupby(['cedula', 'cargo'])['zero'].transform('min')
+registros = registros.loc[~((registros['cargo'] == 'otro') & (registros['zero'] == 1))]
+registros = registros.drop_duplicates(['cedula', 'cargo', 'iddoc'], ignore_index=True)
 
 # Match to imagenes ================================================================
 
@@ -22,18 +31,19 @@ datosimgs = pd.read_parquet(here()/"data/txt_extraction/datos_imgs.parquet")
 # Match info
 datosimgs = pd.merge(
   datosimgs.drop(columns='cargo'),
-  registros.loc[registros['iddoc'] != '0', ['cedula', 'iddoc', 'year', 'min_year', 'cargo']],
+  registros.loc[(registros['iddoc'] != 0) | (registros['zero'] == 1),
+    ['cedula', 'iddoc', 'year', 'min_year', 'cargo', 'zero']],
   how='outer',
   on=['cedula', 'iddoc'],
-  validate='1:1',
+  validate='1:m',
   indicator=True
 )
 
 # REmove non-fiscales o jueces
 datosimgs = (datosimgs
-             .loc[datosimgs['cargo'].isin(['juez', 'fiscal'])]
+             .loc[(datosimgs['cargo'].isin(['juez', 'fiscal'])) & ((datosimgs['iddoc']!='0') | (datosimgs['zero']!=0))]
              .sort_values(['cedula', 'year'], ignore_index=True)
-             .drop(columns='_merge')
+             .drop(columns=['_merge', 'zero'])
              )
 
 
@@ -131,16 +141,18 @@ datosimgs.loc[(datosimgs['mes'] > 12) | (datosimgs['mes'] < 1), 'mes'] = np.nan
 # Create fecha string only if values work
 datosimgs.loc[~((datosimgs['anio'].isna()) | (datosimgs['mes'].isna())), 'fecha_str'] = datosimgs['from_nodash']
 
+
 # 1. If it has a single mode, we keep that date ---------------------------------------------
 datosimgs['mode_fecha'] = datosimgs.groupby(['cedula', 'cargo'])['fecha_str'].transform(single_mode)
 datosimgs['fecha_final'] = datosimgs['mode_fecha']
+
 
 # 2. Si no hay un solo valido nos quedamos con el min_year y el mes que este -----------------------------------
 datosimgs['anio_nan'] = 1*(datosimgs['anio'].isna())
 datosimgs['anio_nan'] = datosimgs.groupby(['cedula', 'cargo'])['anio_nan'].transform('min')
 
 # Encontrar el mes para completar con el anio
-datosimgs.loc[datosimgs['anio_nan']==1, 'mes_mode'] = datosimgs.groupby(['cedula', 'cargo'])['mes'].transform(any_mode)
+datosimgs.loc[datosimgs['anio_nan'] == 1, 'mes_mode'] = datosimgs.groupby(['cedula', 'cargo'])['mes'].transform(any_mode)
 
 # Completar fecha final en los que tienen mes
 new_fecha = datosimgs['mes_mode'].fillna(0).astype('int').astype('str')
@@ -166,11 +178,20 @@ datosimgs['mode_fecha'] = datosimgs.groupby(['cedula', 'cargo'])['fecha_str'].tr
 datosimgs.loc[datosimgs['fecha_final'].isna(), 'fecha_final'] = datosimgs['mode_fecha']
 
 
-# 4. From the reminder try to pick any mode -------------------------------------------------------------------
+# 4. Try to pick any mode -------------------------------------------------------------------
 datosimgs['mode_fecha'] = datosimgs.groupby(['cedula', 'cargo'])['fecha_str'].transform(any_mode)
 datosimgs.loc[datosimgs['fecha_final'].isna(), 'fecha_final'] = datosimgs['mode_fecha']
 
-datosimgs.query('fecha_final.isna()')
+
+# 5. There are missing in year, but with moth and viceversa -------------------------------------------------------
+datosimgs.loc[datosimgs['fecha_final'].isna(), 'mode_anio'] = datosimgs.groupby(['cedula', 'cargo'])['anio'].transform(single_mode)
+datosimgs['mode_anio'] = datosimgs['mode_anio'].fillna(0).astype(int).astype(str)
+
+datosimgs.loc[datosimgs['fecha_final'].isna(), 'mode_mes'] = datosimgs.groupby(['cedula', 'cargo'])['mes'].transform(single_mode)
+datosimgs.loc[datosimgs['fecha_final'].isna() & datosimgs['mode_mes'].isna(), 'mode_mes'] = 8
+datosimgs['mode_mes'] = datosimgs['mode_mes'].fillna(0).astype(int).astype(str).str.pad(width=2, side='left', fillchar='0')
+
+datosimgs.loc[datosimgs['fecha_final'].isna(), 'fecha_final'] = datosimgs['mode_anio'] + datosimgs['mode_mes']
 
 
 # FINAL CHANGES ==============================================================================================

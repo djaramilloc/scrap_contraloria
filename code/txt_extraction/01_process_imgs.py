@@ -133,3 +133,4 @@ for row in faltantes.iterrows():
 
 # Save data
 pd.DataFrame(res).to_parquet(here()/f"data/temp/datos_contraloria.parquet", index=False)
+
