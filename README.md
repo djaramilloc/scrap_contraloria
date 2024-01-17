@@ -1,3 +1,3 @@
 # Scrap Controlaria
 
-Code to download and process the text of declaraciones juradas de la contraloria
+Code to download and process the text of sworn statements made by public officials
